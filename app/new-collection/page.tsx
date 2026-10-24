@@ -4,9 +4,11 @@ import JSZip from "jszip";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { ChangeEvent, MouseEvent, useEffect, useRef, useState } from "react";
+import { processWatchFiles } from "@/lib/groupwatch-import";
 import type { YouTubePlayer } from "@/types/youtube";
-import youtubeLogo from "@/assets/img/youtube logo.svg";
-import uploadIcon from "@/assets/icon/up-loading.png";
+import instagramLogo from "@/assets/img/instagram_logo.webp";
+import tiktokLogo from "@/assets/img/tiktok_logo.png";
+import youtubeLogo from "@/assets/img/youtube_logo.webp";
 
 type SelectedVideo = {
   kind: "local";
@@ -136,6 +138,7 @@ function getVideoDurationSeconds(file: File) {
 export default function PlaylistCreatorPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const groupWatchInputRef = useRef<HTMLInputElement>(null);
   const allObjectUrlsRef = useRef<string[]>([]);
   const selectedClipElementRef = useRef<HTMLDivElement | null>(null);
   const [clipQueue, setClipQueue] = useState<QueueItem[]>([]);
@@ -145,6 +148,8 @@ export default function PlaylistCreatorPage() {
   const [exportError, setExportError] = useState<string>("");
   const [isAddClipModalOpen, setIsAddClipModalOpen] = useState(false);
   const [isYouTubeModalOpen, setIsYouTubeModalOpen] = useState(false);
+  const [isInstagramModalOpen, setIsInstagramModalOpen] = useState(false);
+  const [isTikTokModalOpen, setIsTikTokModalOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [playlistName, setPlaylistName] = useState("New GroupWatch Collection");
   const [youtubeLink, setYoutubeLink] = useState("");
@@ -258,11 +263,26 @@ export default function PlaylistCreatorPage() {
     openFilePicker();
   };
 
+  const handleChooseGroupWatchFile = () => {
+    setIsAddClipModalOpen(false);
+    groupWatchInputRef.current?.click();
+  };
+
   const handleChooseYouTubeClip = () => {
     setIsAddClipModalOpen(false);
     setYoutubeLink("");
     setYoutubeLinkError("");
     setIsYouTubeModalOpen(true);
+  };
+
+  const handleChooseInstagram = () => {
+    setIsAddClipModalOpen(false);
+    setIsInstagramModalOpen(true);
+  };
+
+  const handleChooseTikTok = () => {
+    setIsAddClipModalOpen(false);
+    setIsTikTokModalOpen(true);
   };
 
   const reusePreviousYouTubeLink = () => {
@@ -386,6 +406,85 @@ export default function PlaylistCreatorPage() {
     setSelectedVideo(nextClips[0]);
 
     event.target.value = "";
+  };
+
+  const onGroupWatchFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(event.target.files ?? []);
+
+    if (selectedFiles.length === 0) {
+      return;
+    }
+
+    const createdUrls: string[] = [];
+    setUploadError("");
+
+    try {
+      const processed = await processWatchFiles(selectedFiles);
+      const importedItems: QueueItem[] = [];
+
+      for (const entry of processed.entries) {
+        if (entry.kind === "youtube") {
+          importedItems.push({
+            kind: "youtube",
+            id: createQueueItemId(),
+            name: `YouTube: ${entry.id}`,
+            videoId: entry.id,
+            sourceUrl: `https://www.youtube.com/watch?v=${entry.id}`,
+            start: entry.start,
+            end: entry.end,
+          });
+          continue;
+        }
+
+        const archiveFile = processed.archives[entry.archiveId]?.file(entry.name);
+
+        if (!archiveFile) {
+          continue;
+        }
+
+        const blob = await archiveFile.async("blob");
+        const extension = entry.name.split(".").pop()?.toLowerCase();
+        const mimeType = extension === "webm"
+          ? "video/webm"
+          : extension === "ogg"
+            ? "video/ogg"
+            : extension === "mov"
+              ? "video/quicktime"
+              : "video/mp4";
+        const videoBlob = new Blob([blob], { type: mimeType });
+        const url = URL.createObjectURL(videoBlob);
+        createdUrls.push(url);
+
+        const videoFile = new File([videoBlob], entry.name, { type: mimeType });
+        const durationSeconds = await getVideoDurationSeconds(videoFile);
+
+        importedItems.push({
+          kind: "local",
+          id: createQueueItemId(),
+          name: entry.name,
+          sizeMB: (videoBlob.size / (1024 * 1024)).toFixed(2),
+          durationSeconds,
+          sizeBytes: videoBlob.size,
+          mimeType,
+          lastModified: 0,
+          url,
+        });
+      }
+
+      if (importedItems.length === 0) {
+        setUploadError("No videos were found in the selected GroupWatch file.");
+        return;
+      }
+
+      allObjectUrlsRef.current.push(...createdUrls);
+      setClipQueue((previous) => [...previous, ...importedItems]);
+      setSelectedVideo(importedItems[0]);
+    } catch {
+      createdUrls.forEach((url) => URL.revokeObjectURL(url));
+      setUploadError("Unable to import the selected GroupWatch file.");
+    } finally {
+      event.target.value = "";
+    }
   };
 
   useEffect(() => {
@@ -541,7 +640,17 @@ export default function PlaylistCreatorPage() {
   };
 
   return (
-    <main className="flex h-screen items-center justify-center overflow-hidden p-12 text-gray-100">
+    <main className="relative flex h-screen items-center justify-center overflow-hidden p-12 text-gray-100">
+      <button
+        type="button"
+        onClick={() => router.push("/")}
+        aria-label="Back to home"
+        title="Back to home"
+        className="absolute left-4 top-4 z-10 flex cursor-pointer items-center gap-2 border-0 bg-transparent p-1 text-sm font-medium text-sky-200/50 transition hover:text-sky-100"
+      >
+        <span aria-hidden="true" className="text-xl leading-none">←</span>
+        <span>Back</span>
+      </button>
       <section className="grid h-full w-full max-w-7xl gap-4 lg:grid-cols-[1fr_2fr]">
         <article className="flex h-full min-h-0 flex-col overflow-hidden rounded-3xl border border-sky-200/15 bg-main p-6 shadow-2xl shadow-black/30 backdrop-blur">
           <h2 className="text-xl font-semibold text-gray-50">New Collection</h2>
@@ -565,6 +674,15 @@ export default function PlaylistCreatorPage() {
               accept="video/*"
               multiple
               onChange={onVideoChange}
+              className="hidden"
+            />
+
+            <input
+              ref={groupWatchInputRef}
+              type="file"
+              accept=".groupwatch,.json"
+              multiple
+              onChange={onGroupWatchFileChange}
               className="hidden"
             />
 
@@ -732,7 +850,7 @@ export default function PlaylistCreatorPage() {
 
       {isAddClipModalOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="relative w-full max-w-md rounded-3xl border border-sky-200/15 bg-main p-6 shadow-xl shadow-black/30">
+          <div className="relative w-full max-w-2xl rounded-3xl border border-sky-200/15 bg-main p-6 shadow-xl shadow-black/30">
             <button
               type="button"
               onClick={() => {
@@ -744,17 +862,27 @@ export default function PlaylistCreatorPage() {
               ✕
             </button>
 
-            <h3 className="text-lg font-semibold text-gray-100">Add Clips</h3>
+            <h1 className="text-xl font-semibold text-gray-100">Add Clips</h1>
             {/* <p className="mt-2 text-sm text-gray-300">Choose a source.</p> */}
 
-            <div className="mt-5 grid grid-cols-2 gap-4">
-              <button type="button" onClick={handleChooseComputerClip} className="group flex flex-col items-center gap-2 rounded-xl border border-sky-200/15 bg-gray-800 p-3 transition hover:border-sky-200/40 cursor-pointer">
-                <Image src={uploadIcon} alt="" className="aspect-video w-full object-contain p-3" />
+            <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-6">
+              <button type="button" onClick={handleChooseComputerClip} className="group flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-sky-200/15 bg-gray-800 p-3 transition hover:border-sky-200/40 sm:col-span-3 sm:col-start-1">
                 <span className="text-gray-200 transition group-hover:text-sky-100">Upload Video Files</span>
               </button>
-              <button type="button" onClick={handleChooseYouTubeClip} className="group flex flex-col items-center gap-2 rounded-xl border border-sky-200/15 bg-gray-800 p-3 transition hover:border-sky-200/40 cursor-pointer">
-                <Image src={youtubeLogo} alt="" className="aspect-video w-full object-contain p-3" />
-                <span className="text-gray-200 transition group-hover:text-sky-100">YouTube Link</span>
+              <button type="button" onClick={handleChooseGroupWatchFile} className="group flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-sky-200/15 bg-gray-800 p-3 transition hover:border-sky-200/40 sm:col-span-3 sm:col-start-4">
+                <span className="text-center text-gray-200 transition group-hover:text-sky-100">Import GroupWatch Collection</span>
+              </button>
+              <button type="button" onClick={handleChooseInstagram} className="group flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-sky-200/15 bg-gray-800 p-3 transition hover:border-sky-200/40 sm:col-span-2 sm:col-start-1">
+                <Image src={instagramLogo} alt="" className="aspect-square w-full object-contain p-1" />
+                <span className="text-gray-200 transition group-hover:text-sky-100">Instagram</span>
+              </button>
+              <button type="button" onClick={handleChooseTikTok} className="group flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-sky-200/15 bg-gray-800 p-3 transition hover:border-sky-200/40 sm:col-span-2 sm:col-start-3">
+                <Image src={tiktokLogo} alt="" className="aspect-square w-full object-contain p-1" />
+                <span className="text-gray-200 transition group-hover:text-sky-100">TikTok</span>
+              </button>
+              <button type="button" onClick={handleChooseYouTubeClip} className="group flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-sky-200/15 bg-gray-800 p-3 transition hover:border-sky-200/40 sm:col-span-2 sm:col-start-5">
+                <Image src={youtubeLogo} alt="" className="aspect-square w-full object-contain p-1" />
+                <span className="text-gray-200 transition group-hover:text-sky-100">YouTube</span>
               </button>
             </div>
           </div>
@@ -845,7 +973,7 @@ export default function PlaylistCreatorPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-md rounded-3xl border border-sky-200/15 bg-main p-6 shadow-xl shadow-black/30">
             <h3 className="text-lg font-semibold text-gray-100">Add YouTube Clip</h3>
-            <p className="mt-2 text-sm text-gray-300">Paste a YouTube link to add it to the queue summary.</p>
+            <p className="mt-2 text-sm text-gray-300">Paste any YouTube link and add it to this collection.</p>
 
             <input
               type="url"
@@ -889,6 +1017,62 @@ export default function PlaylistCreatorPage() {
                 className="gw-btn-primary"
               >
                 Add Clip
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isInstagramModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-3xl border border-sky-200/15 bg-main p-6 shadow-xl shadow-black/30">
+            <h1 className="text-xl font-semibold text-gray-100">Add Instagram Reel</h1>
+            <p className="mt-2 text-sm text-sky-100/70">You&apos;ll need to first download the reel as a video file. We recommend using <a href="https://snapinsta.to" target="_blank" className="text-sky-300 underline underline-offset-2 transition hover:text-sky-100">SnapInsta</a> to do this.</p>
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setIsInstagramModalOpen(false)}
+                className="gw-btn-lesser"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsInstagramModalOpen(false);
+                  openFilePicker();
+                }}
+                className="gw-btn-primary"
+              >
+                Upload Video File
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isTikTokModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-3xl border border-sky-200/15 bg-main p-6 shadow-xl shadow-black/30">
+            <h1 className="text-xl font-semibold text-gray-100">Add TikTok Video</h1>
+            <p className="mt-2 text-sm text-sky-100/70">Download the TikTok video as a video file, then add it to your collection.</p>
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setIsTikTokModalOpen(false)}
+                className="gw-btn-lesser"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsTikTokModalOpen(false);
+                  openFilePicker();
+                }}
+                className="gw-btn-primary"
+              >
+                Upload Video File
               </button>
             </div>
           </div>

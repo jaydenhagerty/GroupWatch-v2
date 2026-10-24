@@ -2,71 +2,13 @@
 
 import JSZip from "jszip";
 import { ChangeEvent, useEffect, useRef, useState } from "react";
+import {
+  processWatchFiles,
+  type LocalVideoEntry,
+  type VideoEntry,
+  type YouTubeVideoEntry,
+} from "@/lib/groupwatch-import";
 import type { YouTubePlayer } from "@/types/youtube";
-
-type LocalVideoEntry = {
-  kind: "local";
-  archiveId: string;
-  name: string;
-};
-
-type YouTubeVideoEntry = {
-  kind: "youtube";
-  id: string;
-  start: number;
-  end: number;
-};
-
-type VideoEntry = LocalVideoEntry | YouTubeVideoEntry;
-
-function isVideoEntry(name: string) {
-  return /\.(mp4|webm|ogg|mov|m4v)$/i.test(name);
-}
-
-function extractYouTubeEntries(parsed: unknown): YouTubeVideoEntry[] {
-  if (!parsed || typeof parsed !== "object") {
-    return [];
-  }
-
-  const parsedObject = parsed as {
-    youtubeClips?: Array<{ id?: unknown; start?: unknown; end?: unknown }>;
-    YouTubeClips?: Array<{ id?: unknown; start?: unknown; end?: unknown }>;
-    items?: Array<{ id?: unknown; start?: unknown; end?: unknown }>;
-  };
-
-  const youtubeClipArrays = [
-    parsedObject.youtubeClips,
-    parsedObject.YouTubeClips,
-    parsedObject.items,
-  ].filter(Array.isArray) as Array<Array<{ id?: unknown; start?: unknown; end?: unknown }>>;
-
-  const entries: YouTubeVideoEntry[] = [];
-
-  for (const youtubeArray of youtubeClipArrays) {
-    for (const youtubeClip of youtubeArray) {
-      if (
-        typeof youtubeClip?.id !== "string" ||
-        typeof youtubeClip?.start !== "number" ||
-        typeof youtubeClip?.end !== "number"
-      ) {
-        continue;
-      }
-
-      if (youtubeClip.end <= youtubeClip.start) {
-        continue;
-      }
-
-      entries.push({
-        kind: "youtube",
-        id: youtubeClip.id,
-        start: youtubeClip.start,
-        end: youtubeClip.end,
-      });
-    }
-  }
-
-  return entries;
-}
 
 export default function WatchPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -190,58 +132,6 @@ export default function WatchPage() {
     return true;
   };
 
-  const buildQueueEntriesFromArchive = async (zip: JSZip, archiveId: string) => {
-    const dataFile = zip.file("data.json");
-    const queueEntries: VideoEntry[] = [];
-
-    if (dataFile) {
-      try {
-        const raw = await dataFile.async("text");
-        const parsed: unknown = JSON.parse(raw);
-
-        if (parsed && typeof parsed === "object") {
-          const parsedObject = parsed as {
-            localClips?: Array<{ name?: unknown }>;
-          };
-
-          if (Array.isArray(parsedObject.localClips)) {
-            for (const localClip of parsedObject.localClips) {
-              if (typeof localClip?.name !== "string") {
-                continue;
-              }
-
-              if (!zip.file(localClip.name)) {
-                continue;
-              }
-
-              queueEntries.push({
-                kind: "local",
-                archiveId,
-                name: localClip.name,
-              });
-            }
-          }
-
-          queueEntries.push(...extractYouTubeEntries(parsed));
-        }
-      } catch {
-        // Ignore malformed data.json and fall back below.
-      }
-    }
-
-    if (queueEntries.length > 0) {
-      return queueEntries;
-    }
-
-    return Object.values(zip.files)
-      .filter((zipEntry) => !zipEntry.dir && isVideoEntry(zipEntry.name))
-      .map((zipEntry) => ({
-        kind: "local" as const,
-        archiveId,
-        name: zipEntry.name,
-      }));
-  };
-
   const openFilePicker = () => {
     fileInputRef.current?.click();
   };
@@ -254,43 +144,12 @@ export default function WatchPage() {
     }
 
     setLoadingArchive(true);
-    const nextEntries: VideoEntry[] = [];
-
     try {
-      for (let index = 0; index < files.length; index += 1) {
-        const file = files[index];
-        const isArchive = file.name.endsWith(".groupwatch") || file.name.endsWith(".zip");
-        const isJson = file.name.endsWith(".json");
+      const processed = await processWatchFiles(files);
 
-        const isSupported = isArchive || isJson;
-
-        if (!isSupported) {
-          continue;
-        }
-
-        if (isJson) {
-          try {
-            const raw = await file.text();
-            const parsed: unknown = JSON.parse(raw);
-            nextEntries.push(...extractYouTubeEntries(parsed));
-          } catch {
-            // Ignore malformed json files.
-          }
-          continue;
-        }
-
-        const zip = await JSZip.loadAsync(await file.arrayBuffer());
-        const archiveId = `${file.name}-${Date.now()}-${index}`;
-
-        archivesRef.current[archiveId] = zip;
-
-        const archiveEntries = await buildQueueEntriesFromArchive(zip, archiveId);
-
-        nextEntries.push(...archiveEntries);
-      }
-
-      if (nextEntries.length > 0) {
-        setVideoEntries((previous) => [...previous, ...nextEntries]);
+      if (processed.entries.length > 0) {
+        Object.assign(archivesRef.current, processed.archives);
+        setVideoEntries((previous) => [...previous, ...processed.entries]);
       }
     } catch {
       // Ignore invalid archives to keep the UI minimal.
