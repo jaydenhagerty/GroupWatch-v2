@@ -71,6 +71,7 @@ export default function FacePage() {
   const smileThresholdRef = useRef(60);
   const regionDelayRef = useRef(3);
   const soundEnabledRef = useRef(true);
+  const centerTileRef = useRef(false);
   const boomAudioRef = useRef<HTMLAudioElement | null>(null);
   const regionLastCountedAtRef = useRef(new Map<number, number>());
   const regionsRef = useRef<FaceRegion[]>([]);
@@ -85,6 +86,7 @@ export default function FacePage() {
   const [smileThreshold, setSmileThreshold] = useState(60);
   const [regionDelay, setRegionDelay] = useState("3");
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [centerTile, setCenterTile] = useState(false);
   const [error, setError] = useState("");
 
   const updateRegions = useCallback(
@@ -284,6 +286,7 @@ export default function FacePage() {
       console.error = filteredConsoleError;
 
       let landmarkers: FaceLandmarker[];
+      let createLandmarker: () => Promise<FaceLandmarker>;
       try {
         const fileset = await FilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.1/wasm",
@@ -301,7 +304,7 @@ export default function FacePage() {
           outputFaceBlendshapes: true,
         };
 
-        const createLandmarker = async () => {
+        createLandmarker = async () => {
           try {
             return await FaceLandmarker.createFromOptions(fileset, {
               ...options,
@@ -332,6 +335,29 @@ export default function FacePage() {
       setIsTracking(true);
 
       let lastDetection = 0;
+      let isLoadingCenterTile = false;
+      const loadCenterTile = async () => {
+        isLoadingCenterTile = true;
+        const previousConsoleError = console.error;
+        console.error = filteredConsoleError;
+        try {
+          const centerLandmarker = await createLandmarker();
+          if (generation !== generationRef.current || !landmarkerRef.current) {
+            centerLandmarker.close();
+            return;
+          }
+          landmarkerRef.current.push(centerLandmarker);
+        } catch {
+          centerTileRef.current = false;
+          setCenterTile(false);
+        } finally {
+          if (console.error === filteredConsoleError) {
+            console.error = previousConsoleError;
+          }
+          isLoadingCenterTile = false;
+        }
+      };
+
       const detect = (timestamp: number) => {
         if (
           generation !== generationRef.current ||
@@ -339,6 +365,14 @@ export default function FacePage() {
           !landmarkerRef.current
         ) {
           return;
+        }
+
+        if (
+          centerTileRef.current &&
+          !isLoadingCenterTile &&
+          landmarkerRef.current.length === 2
+        ) {
+          void loadCenterTile();
         }
 
         if (
@@ -350,7 +384,11 @@ export default function FacePage() {
           const videoWidth = video.videoWidth;
           const videoHeight = video.videoHeight;
           const side = Math.min(videoWidth, videoHeight);
-          const tileCount = landmarkerRef.current.length;
+          const activeLandmarkers = landmarkerRef.current.slice(
+            0,
+            centerTileRef.current ? 3 : 2,
+          );
+          const tileCount = activeLandmarkers.length;
           const canvas = (tileCanvasRef.current ??= document.createElement("canvas"));
           canvas.width = side;
           canvas.height = side;
@@ -364,8 +402,8 @@ export default function FacePage() {
           // The model downsamples its input to a tiny square, so running it on
           // square tiles of the frame keeps far-away faces larger than a full
           // letterboxed frame would.
-          landmarkerRef.current.forEach((tileLandmarker, tileIndex) => {
-            const shift = tileCount > 1 ? tileIndex / (tileCount - 1) : 0.5;
+          activeLandmarkers.forEach((tileLandmarker, tileIndex) => {
+            const shift = tileCount > 1 ? [0, 1, 0.5][tileIndex] : 0.5;
             const offsetX = (videoWidth - side) * shift;
             const offsetY = (videoHeight - side) * shift;
             tileContext?.drawImage(
@@ -761,6 +799,25 @@ export default function FacePage() {
                   onChange={(event) => {
                     soundEnabledRef.current = event.target.checked;
                     setSoundEnabled(event.target.checked);
+                  }}
+                  className="h-4 w-4 cursor-pointer accent-sky-400"
+                />
+              </div>
+              <div className="flex min-h-11 items-center justify-between gap-3 border-t border-white/[0.08] pt-3">
+                <label
+                  htmlFor="center-tile"
+                  title="Adds a third detection pass over the middle of the frame. Better at distance, but uses more CPU/GPU."
+                  className="text-sm font-medium text-gray-200"
+                >
+                  Enhanced detection
+                </label>
+                <input
+                  id="center-tile"
+                  type="checkbox"
+                  checked={centerTile}
+                  onChange={(event) => {
+                    centerTileRef.current = event.target.checked;
+                    setCenterTile(event.target.checked);
                   }}
                   className="h-4 w-4 cursor-pointer accent-sky-400"
                 />
